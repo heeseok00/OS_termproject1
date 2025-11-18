@@ -1,3 +1,17 @@
+/*
+[run queue / wait queue 전체 로직]
+
+1. Parent가 CPU를 준다. 
+2. Child가 CPU burst를 소모한다.
+3. CPU burst 끝난 child는 Parent에게 IO burst를 보낸다. 
+4. Parent는 IO burst 메시지를 받는다.  (여기까지 진행함.)
+5. Parent는 child를 run queue에서 wait queue로 이동시킨다.
+6. Parent는 wait queue에서 IO burst를 감소시킨다.
+7. IO burst가 끝나면 다시 run queue로 보내서 schedule 반복한다.
+*/
+
+
+
 // Round Robin, 타이머, IPC, fork 등에 필요한 헤더들
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,8 +27,9 @@
 // 부모가 자식에게 보내는 기본 코드
 
 struct msgbuf {
-    long mtype;
-    int value;
+    long mtype; // 메시지 타입입
+    int pid; // 전달자 PID
+    int value; //burst time
 };
 
 void send_timeslice(int msgid, pid_t child_pid) {
@@ -22,10 +37,10 @@ struct msgbuf msg;
 
 msg.mtype = child_pid; // 이 메시지는 child_pid에게 배달된다.
 msg.value = 1; //CPU time slice = 1 tick
-msgsnd(msgid,&msg,sizeof(msg.value),0);
+msgsnd(msgid,&msg,0,0);
 }
 
-// Child Code
+// Child 코드드
 void exe_child(int msgid) {
     struct msgbuf msg;
 
@@ -33,7 +48,7 @@ void exe_child(int msgid) {
 
     while (1) {
         // 1) 부모가 보내는 메시지를 기다림
-        msgrcv(msgid, &msg, sizeof(msg.value), getpid(), 0);
+        msgrcv(msgid, &msg, 0 , getpid(), 0);
 
         // 2) 메시지를 받으면 CPU burst를 1 감소
         cpu_burst--;
@@ -41,13 +56,12 @@ void exe_child(int msgid) {
         // 3) CPU burst가 끝났으면 부모에게 IO 요청 메시지 보내기
         if (cpu_burst <= 0) {
             struct msgbuf send;
-            send.mtype = 1;                // 부모가 받을 타입
-            send.value = rand() % 5 + 1;   // IO burst 랜덤 생성
+            send.mtype = 1;      // 부모가 받을 타입 (IO 보고용)
+            send.pid = getpid();  // 누가 보냈는지 알려주기  
+            send.value = rand() % 5 + 1;   // IO burst 랜덤 생성 (1~5)
+            msgsnd(msgid, &send, sizeof(send)  - sizeof(long), 0);  // 메시지 안에서 mtype(=long) 제외한 나머지 (pid + value) 데이터 크기만 보내라는 뜻. 
 
-            msgsnd(msgid, &send, sizeof(send.value), 0);
-
-            // 다음 CPU burst도 랜덤으로 생성
-            cpu_burst = rand() % 5 + 1;
+            cpu_burst = rand() % 5 + 1; // IO 후에 다시 새로운 CPU burst 시작
         }
     }
 }
@@ -86,9 +100,16 @@ int main() {
 
     // ---- 부모가 여기서 스케줄링 루프 돌게 될 예정 ----
     while (1) {
-        send_timeslice(msgid, pids[0]); // child0에게 계속 CPU 주기 (시험용으로 이렇게 잠깐 써둠.)
-        sleep(1); // 임시
+        // 1) child 0에게 CPU 1 tick 부여 (임시 테스트용)
+        send_timeslice(msgid, pids[0]);
+
+        // 2) IO 메시지 받기 (child -> parent)
+        struct msgbuf recv;
+        while (msgrcv(msgid, &recv, sizeof(recv) - sizeof(long), 1, IPC_NOWAIT) != -1) {
+            printf("[Parent] Child %d requested IO. IO burst = %d\n",
+                    recv.pid, recv.value);
+        }
+        sleep(1);
     }
 
-    return 0;
 }
